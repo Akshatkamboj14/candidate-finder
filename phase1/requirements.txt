@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+sqlalchemy
+databases
+pydantic
+pdfminer.six
+chromadb
+boto3
+python-dotenv
+requests
