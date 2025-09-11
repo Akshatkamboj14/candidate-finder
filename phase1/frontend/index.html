@@ -26,7 +26,11 @@
         document.getElementById('find').onclick = async () => {
             const jd = document.getElementById('jd').value;
             const k = Number(document.getElementById('k').value || 10);
-            const res = await fetch('/api/job', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jd, k }) });
+            const res = await fetch(`${API_BASE}/api/job`, {
+		  method: 'POST',
+		  headers: { 'content-type': 'application/json' },
+		  body: JSON.stringify({ jd, k })
+		});
             const data = await res.json();
             const resultsDiv = document.getElementById('results');
             resultsDiv.innerHTML = '';
@@ -42,7 +46,9 @@
             const f = document.getElementById('file').files[0];
             const fd = new FormData();
             fd.append('file', f);
-            const res = await fetch('/api/upload', { method: 'POST', body: fd });
+
+	    const res = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: fd });
+
             const data = await res.json();
             alert('Uploaded: ' + JSON.stringify(data));
         }
