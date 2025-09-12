@@ -8,8 +8,67 @@ from .vectorstore import upsert_profile
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
 
+
+# ---------- PyTorch / CNN evidence extractor (paste after imports) ----------
+import re
+from typing import List
+
+_PYTORCH_PATTERNS = [
+    r"\bimport\s+torch\b",
+    r"\bfrom\s+torch\b",
+    r"\btorch\.",
+    r"\bPyTorch\b",
+    r"\bConv2d\b",
+    r"\bConv3d\b",
+    r"\bconvolutional\b",
+    r"\bcnn\b",
+    r"\bnn\.Module\b",
+    r"\btorchvision\b",
+    r"\bkeras\b",
+    r"\btensorflow\b",
+]
+
+def extract_evidence_from_text(text: str) -> List[str]:
+    """Return list of matching evidence snippets found in text (deduped)."""
+    if not text:
+        return []
+    evidence = []
+    for pattern in _PYTORCH_PATTERNS:
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            start = max(0, m.start() - 80)
+            end = min(len(text), m.end() + 80)
+            snippet = text[start:end].replace("\n", " ")
+            evidence.append(snippet.strip())
+    # dedupe while preserving order
+    seen = set()
+    out = []
+    for e in evidence:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return out
+# ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", None)
+
+
 GITHUB_API_BASE = "https://api.github.com"
 
 HEADERS = {"Accept": "application/vnd.github.v3+json"}
@@ -63,7 +122,7 @@ def _get_repo_readme(owner: str, repo: str):
 def normalize_user_to_profile(user_obj: dict, top_repos: List[dict], readmes: Dict[str, str]) -> str:
     """
     Build a unified profile_text string from user metadata, repo READMEs and repo metadata.
-    Keep it concise but information-rich for embedding.
+    Enriches the profile with evidence snippets (PyTorch/CNN) extracted from bio + READMEs.
     """
     parts = []
     name = user_obj.get("name") or user_obj.get("login")
@@ -79,18 +138,112 @@ def normalize_user_to_profile(user_obj: dict, top_repos: List[dict], readmes: Di
     if blog:
         parts.append(f"Website: {blog}")
     parts.append(f"ProfileURL: {html_url}")
+
     parts.append("Top Repositories:")
+    # include repo metadata and a longer README excerpt (more context helps evidence extraction)
     for r in top_repos:
         repo_line = f"- {r.get('name')} (stars: {r.get('stargazers_count')}, lang: {r.get('language')})\n  Description: {r.get('description') or ''}"
         parts.append(repo_line)
-        readme = readmes.get(r.get("name"))
+        readme = readmes.get(r.get('name'))
         if readme:
-            # include a short excerpt of the README
-            excerpt = "\n".join(readme.splitlines()[:20])
+            # include a longer excerpt of the README (up to ~2000 chars)
+            excerpt = (readme[:2000] + "...") if len(readme) > 2000 else readme
             parts.append(f"  README excerpt:\n{excerpt}")
-    # join into a single document
+
+    # Build full_text for evidence extraction (bio + all readmes)
+    full_text = "\n\n".join(parts)
+    # append full readmes to search body (not only excerpts)
+    for rd in readmes.values():
+        if rd:
+            full_text += "\n\n" + rd
+
+    evidence = extract_evidence_from_text(full_text)
+    if evidence:
+        parts.append("Detected evidence for PyTorch/CNN (snippets):")
+        for e in evidence:
+            # keep snippets short
+            parts.append(f"- {e[:400]}")
+
+    # small summary footer
+    parts.append("EndProfile")
     doc = "\n\n".join(parts)
     return doc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def fetch_and_index_github_users(query: str, max_users: int = 50, per_user_repos: int = 3) -> List[Dict]:
     """
@@ -144,7 +297,20 @@ def fetch_and_index_github_users(query: str, max_users: int = 50, per_user_repos
             # upsert to vectorstore
             profile_id = f"github:{username}"
             try:
-                upsert_profile(profile_id, profile_text, vec, metadata={"source": "github", "username": username, "profile_url": user_obj.get("html_url")})
+               has_evidence = bool(extract_evidence_from_text(profile_text))
+
+		upsert_profile(
+                     profile_id,
+                   profile_text,
+                            vec,
+                      metadata={
+                            "source": "github",
+                            "username": username,
+                            "profile_url": user_obj.get("html_url"),
+                            "pyTorchEvidence": has_evidence,
+                              },
+                    )
+
                 results_summary.append({"username": username, "id": profile_id, "indexed": True})
                 users_indexed += 1
             except Exception as e:
