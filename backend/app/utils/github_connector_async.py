@@ -308,7 +308,7 @@ def fetch_and_index_github_users_concurrent(query: str, max_users: int = 50, per
                 profile_id = f"github:{username}"
                 try:
                     has_evidence = bool(extract_evidence_from_text(profile_text))
-                        upsert_profile(
+                    upsert_profile(
                         profile_id,
                         profile_text,
                         vec,
@@ -319,8 +319,7 @@ def fetch_and_index_github_users_concurrent(query: str, max_users: int = 50, per
                             "pyTorchEvidence": has_evidence,
                         },
                     )
-
-
+                        
                     summary.append({"username": username, "id": profile_id, "indexed": True})
                 except Exception as e:
                     summary.append({"username": username, "indexed": False, "reason": f"upsert_err:{e}"})
