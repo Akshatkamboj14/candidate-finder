@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 import threading, time
 from .utils.github_connector_async import fetch_and_index_github_users_concurrent
 from fastapi import Response
+from fastapi import Form, HTTPException
+from .utils.skills import extract_keywords_from_jd, find_evidence_for_skills
+
 
 INGEST_JOBS = {}
 
@@ -102,9 +105,10 @@ async def create_job(req: JobRequest, background_tasks: BackgroundTasks):
 async def rag_answer(job_id: str = Form(None), query: str = Form(...), jd: str = Form(None)):
     """
     Flexible RAG:
-    - If job_id provided and exists in JOB_STORE -> use stored JD.
-    - Else if jd provided (direct JD), run retrieval on the fly.
-    - Else return error JSON.
+    - Accepts job_id OR jd parameter. If neither provided -> error.
+    - Extracts skills from JD, finds evidence snippets in retrieved docs,
+      builds a prompt including candidate contexts + evidence, and calls LLM.
+    - Returns the model 'answer', list of source ids, and the evidence map per candidate.
     """
     try:
         # determine JD to use
@@ -113,7 +117,6 @@ async def rag_answer(job_id: str = Form(None), query: str = Form(...), jd: str =
             if job:
                 jd_text = job["jd"]
             else:
-                # job_id missing: if a jd param provided, prefer that; else error
                 if jd:
                     jd_text = jd
                 else:
@@ -124,22 +127,56 @@ async def rag_answer(job_id: str = Form(None), query: str = Form(...), jd: str =
             else:
                 return {"error": "must provide either job_id or jd"}
 
-        # embed JD and retrieve docs
+        # embed JD & retrieve top docs
         jd_vec = get_embedding_for_text(jd_text)
         docs = query_similar(jd_vec, k=6)
 
-        # build prompt with docs (truncate for safety)
-        context = "\n\n---\n\n".join([d.get("document","") for d in docs])
-        prompt = f"You are an assistant. Use the following candidate contexts to answer the question.\n\nCONTEXT:\n{context}\n\nQUESTION:\n{query}\n\nAnswer concisely and list candidate ids you referenced."
+        # skill extraction from JD (general)
+        skill_tokens = extract_keywords_from_jd(jd_text, top_k=8)
+
+        # find evidence snippets for those tokens in docs
+        evidence_map = find_evidence_for_skills(docs, skill_tokens)
+
+        # Build context with evidence appended per candidate (keeps prompt informative)
+        context_parts = []
+        for d in docs:
+            cid = d.get("id")
+            doc_text = d.get("document","")
+            evid = evidence_map.get(cid, [])
+            ev_text = ""
+            if evid:
+                ev_text = "\nEvidence snippets:\n" + "\n".join([f"- {e}" for e in evid])
+            context_parts.append(f"Candidate: {cid}\n{doc_text}\n{ev_text}")
+
+        context = "\n\n---\n\n".join(context_parts)
+
+        # Improved prompt template: ask to cite evidence and give confidence
+        prompt = f"""
+SYSTEM: You are an assistant that answers recruiter questions about candidates. Use ONLY the CONTEXT below — do NOT hallucinate.
+INSTRUCTIONS:
+1) For each candidate, say whether they match the query and list the exact evidence snippets you used (quotations).
+2) Provide a confidence label for each candidate: HIGH / MEDIUM / LOW.
+3) At the end, give a short conclusions list of candidate ids that match.
+
+CONTEXT:
+{context}
+
+JD:
+{jd_text}
+
+QUERY:
+{query}
+
+Answer now.
+"""
 
         answer = get_text_completion(prompt)
-        return {"answer": answer, "sources": [d.get("id") for d in docs]}
+        # return answer, the candidate ids used as sources, and the evidence_map
+        return {"answer": answer, "sources": [d.get("id") for d in docs], "evidence": evidence_map}
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"rag_failed: {str(e)}")
-# -----------------------------------------------------------------------
-
 
 
 
