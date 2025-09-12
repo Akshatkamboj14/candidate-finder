@@ -142,60 +142,6 @@ async def rag_answer(job_id: str = Form(None), query: str = Form(...), jd: str =
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # add model for request
 class GitHubFetchRequest(BaseModel):
     query: str           # e.g., "language:python location:india followers:>10"
@@ -277,56 +223,42 @@ async def inspect_collection():
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+@app.get("/api/filter_by_skill")
+async def filter_by_skill(skill: str):
+    """
+    Return candidates flagged for a skill. For now supports 'pytorch' via metadata 'pyTorchEvidence'.
+    This is a simple, fast debugging endpoint; you can expand it to general skill lists later.
+    """
+    try:
+        from .utils import vectorstore
+        col = vectorstore.collection
+        # try peek (works in the server process)
+        try:
+            p = col.peek()
+            ids = p.get("ids", [])
+            docs = p.get("documents", [])
+            metas = p.get("metadatas", [])
+            out = []
+            for i, id_ in enumerate(ids):
+                meta = metas[i] if i < len(metas) else {}
+                has_skill = False
+                if skill.lower() == "pytorch":
+                    has_skill = meta.get("pyTorchEvidence", False)
+                # fallback: check doc text for skill token
+                if not has_skill and i < len(docs):
+                    if skill.lower() in (docs[i] or "").lower():
+                        has_skill = True
+                if has_skill:
+                    out.append({
+                        "id": id_,
+                        "doc_preview": (docs[i][:300] if i < len(docs) else ""),
+                        "metadata": meta
+                    })
+            return {"count": len(out), "items": out}
+        except Exception as e:
+            return {"error": f"collection peek failed: {e}"}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 
