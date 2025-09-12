@@ -171,30 +171,46 @@ def get_text_completion(prompt: str, max_tokens: int = 256) -> str:
 
         # Parse typical Bedrock messages response:
         # data may look like: {"id": "...", "outputs":[{"content":[{"type":"output_text","text":"..."}]}], ...}
+        # First try: Bedrock's 'outputs' array (common)
         if isinstance(data, dict) and "outputs" in data:
-            try:
-                outputs = data.get("outputs", [])
-                if outputs and isinstance(outputs, list):
-                    first_out = outputs[0]
-                    content_list = first_out.get("content", []) if isinstance(first_out, dict) else []
-                    # find first text in content_list
-                    for c in content_list:
-                        # content items vary: use keys 'text' or 'output_text'
-                        text = c.get("text") or c.get("output_text") or c.get("content")
-                        if text:
-                            return text if isinstance(text, str) else str(text)
-                    # fallback: join any textual elements
-                    texts = []
-                    for c in content_list:
+            outputs = data.get("outputs", [])
+            if outputs and isinstance(outputs, list):
+                first_out = outputs[0]
+                content_list = first_out.get("content", []) if isinstance(first_out, dict) else []
+                # try common text fields
+                for c in content_list:
+                    text = c.get("text") or c.get("output_text") or c.get("content")
+                    if text:
+                        return text if isinstance(text, str) else str(text)
+                # fallback: join any textual parts
+                texts = []
+                for c in content_list:
+                    if isinstance(c, dict):
                         for k in ("text", "output_text", "content"):
                             if k in c:
                                 texts.append(str(c[k]))
-                    if texts:
-                        return "\n".join(texts)
-            except Exception:
-                pass
-
-        # If we couldn't parse a usable answer, raise with diagnostic
+                if texts:
+                    return "\n".join(texts)
+        
+        # Second try: top-level 'content' (the response you saw)
+        if isinstance(data, dict) and "content" in data and isinstance(data["content"], list):
+            for c in data["content"]:
+                if isinstance(c, dict):
+                    text = c.get("text") or c.get("output_text") or c.get("content")
+                    if text:
+                        return text if isinstance(text, str) else str(text)
+            # if content list contains string items, join them
+            texts = [str(x) for x in data["content"] if isinstance(x, (str, int, float))]
+            if texts:
+                return "\n".join(texts)
+        
+        # Third try: some models return the message text directly at top-level 'text' or 'message'
+        for key in ("text", "message", "output", "completion"):
+            if isinstance(data, dict) and key in data:
+                v = data[key]
+                return "\n".join(v) if isinstance(v, list) else str(v)
+        
+        # If we reach here, raise with the previous diagnostic (so we can see raw response)
         raise RuntimeError(f"Text completion returned unexpected format. Raw response: {data}")
 
     else:
@@ -215,6 +231,7 @@ def get_text_completion(prompt: str, max_tokens: int = 256) -> str:
                         return "\n".join([str(x) for x in v])
                     return str(v)
         return str(data)
+
 
 
 
