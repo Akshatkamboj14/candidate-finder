@@ -1,5 +1,0 @@
-.env
-/backend/.env
-/backend/app/.env
-/backend/app/utils/.env
-/frontend/.env

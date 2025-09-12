@@ -1,0 +1,10 @@
+.env
+.venv
+.venv/*
+*/chroma_db/
+chroma_db
+*/__pycache__/
+*/PY
+*/__pycache__/
+backend/app/__pycache__
+backend/app/utils/__pycache__
