@@ -307,22 +307,18 @@ def fetch_and_index_github_users_concurrent(query: str, max_users: int = 50, per
 
                 profile_id = f"github:{username}"
                 try:
-                    upse
-
-
-
-			has_evidence = bool(extract_evidence_from_text(profile_text))
+                    has_evidence = bool(extract_evidence_from_text(profile_text))
                         upsert_profile(
-                             profile_id,
-                           profile_text,
-                                    vec,
-                               metadata={
-                                 "source": "github",
-                                 "username": username,
-                                 "profile_url": user_obj.get("html_url"),
-                                 "pyTorchEvidence": has_evidence,
-                                  },
-                        )
+                        profile_id,
+                        profile_text,
+                        vec,
+                        metadata={
+                            "source": "github",
+                            "username": username,
+                            "profile_url": user_obj.get("html_url"),
+                            "pyTorchEvidence": has_evidence,
+                        },
+                    )
 
 
                     summary.append({"username": username, "id": profile_id, "indexed": True})
