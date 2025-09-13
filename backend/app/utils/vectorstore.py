@@ -1,13 +1,11 @@
 # backend/app/utils/vectorstore.py
 import os
-from dotenv import load_dotenv
+import chromadb
 
-load_dotenv()
 PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 COL_NAME = "profiles"
 
-# Import chroma and its Settings where available
-import chromadb
+
 try:
     from chromadb.config import Settings
 except Exception:
@@ -102,8 +100,8 @@ def upsert_profile(profile_id: str, text: str, vector: list, metadata: dict = No
 
 
 
-import traceback
 import logging
+import traceback
 
 logger = logging.getLogger("uvicorn.error")
 

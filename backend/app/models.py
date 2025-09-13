@@ -1,6 +1,7 @@
-from sqlalchemy import Column, String, DateTime, Text
+from sqlalchemy import Column, DateTime, String, Text
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.sql import func
+
 from .database import Base
 
 

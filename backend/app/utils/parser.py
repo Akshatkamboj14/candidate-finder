@@ -1,5 +1,6 @@
-from pdfminer.high_level import extract_text
 import io
+
+from pdfminer.high_level import extract_text
 
 
 def parse_pdf_bytes(pdf_bytes: bytes) -> str:

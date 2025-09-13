@@ -1,34 +1,35 @@
-import uuid
 import os
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from .utils.parser import parse_pdf_bytes
-from .utils.embeddings import get_embedding_for_text, get_text_completion
-from .utils.vectorstore import upsert_profile, query_similar
 from dotenv import load_dotenv
-# at top of main.py add import
-import threading, time
-from .utils.github_connector_async import fetch_and_index_github_users_concurrent
-from fastapi import Response
-from fastapi import Form, HTTPException
-from .utils.skills import extract_keywords_from_jd, find_evidence_for_skills
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
 
+# If a .env exists in the repo root, load it explicitly.
+# Otherwise fall back to default load_dotenv() behavior.
+if os.path.exists(ENV_PATH):
+    load_dotenv(ENV_PATH)
+else:
+    # this will look for a .env in CWD or the environment
+    load_dotenv()
+
+
+import time
+import uuid
+import json
+from fastapi import (BackgroundTasks, FastAPI, File, Form, HTTPException, Response, UploadFile)
+from pydantic import BaseModel
+from .utils.embeddings import get_embedding_for_text, get_text_completion
+from .utils.github_connector_async import \
+    fetch_and_index_github_users_concurrent
+from .utils.parser import parse_pdf_bytes
+from .utils.skills import extract_keywords_from_jd, find_evidence_for_skills
+from .utils.vectorstore import query_similar, upsert_profile
 
 INGEST_JOBS = {}
 
 
 
 
-# load .env from project root, regardless of where uvicorn is run
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-
-if os.path.isfile(BASE_DIR):
-    load_dotenv(BASE_DIR)
-else:
-    # fallback to default behavior (load from CWD)
-    load_dotenv()
 
 
 
@@ -37,8 +38,10 @@ else:
 
 app = FastAPI(title="JD → Candidates (Phase 1)")
 
-from fastapi.staticfiles import StaticFiles
 import os
+
+from fastapi.staticfiles import StaticFiles
+
 frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
 app.mount("/ui", StaticFiles(directory=frontend_path, html=True), name="frontend")
 
@@ -75,7 +78,6 @@ async def upload_resume(file: UploadFile = File(...)):
 
 
 
-from fastapi import HTTPException
 
 @app.post("/api/job")
 async def create_job(req: JobRequest, background_tasks: BackgroundTasks):
@@ -263,40 +265,84 @@ async def inspect_collection():
 @app.get("/api/filter_by_skill")
 async def filter_by_skill(skill: str):
     """
-    Return candidates flagged for a skill. For now supports 'pytorch' via metadata 'pyTorchEvidence'.
-    This is a simple, fast debugging endpoint; you can expand it to general skill lists later.
+    Return candidates flagged for a skill. Looks for:
+      - metadata.skills_list (JSON string or list)
+      - metadata.skills_evidence_json (JSON string or dict with skill -> snippets)
+      - finally, fallback to searching the document text
     """
     try:
         from .utils import vectorstore
         col = vectorstore.collection
+        out = []
+        skill_lower = (skill or "").strip().lower()
+        if not skill_lower:
+            return {"count": 0, "items": []}
+
         # try peek (works in the server process)
         try:
             p = col.peek()
-            ids = p.get("ids", [])
-            docs = p.get("documents", [])
-            metas = p.get("metadatas", [])
-            out = []
-            for i, id_ in enumerate(ids):
-                meta = metas[i] if i < len(metas) else {}
-                has_skill = False
-                if skill.lower() == "pytorch":
-                    has_skill = meta.get("pyTorchEvidence", False)
-                # fallback: check doc text for skill token
-                if not has_skill and i < len(docs):
-                    if skill.lower() in (docs[i] or "").lower():
-                        has_skill = True
-                if has_skill:
-                    out.append({
-                        "id": id_,
-                        "doc_preview": (docs[i][:300] if i < len(docs) else ""),
-                        "metadata": meta
-                    })
-            return {"count": len(out), "items": out}
-        except Exception as e:
-            return {"error": f"collection peek failed: {e}"}
+            ids = p.get("ids", []) or []
+            docs = p.get("documents", []) or []
+            metas = p.get("metadatas", []) or []
+        except Exception:
+            # fallback: text query to enumerate some docs
+            try:
+                q = col.query(query_texts=[""], n_results=100)
+                ids = q.get("ids", [[]])[0]
+                docs = q.get("documents", [[]])[0]
+                metas = q.get("metadatas", [[]])[0]
+            except Exception as e:
+                return {"error": f"collection peek/query failed: {e}"}
+
+        for i, id_ in enumerate(ids):
+            # safe guards for parallel arrays
+            meta = metas[i] if i < len(metas) else {}
+            doc_text = docs[i] if i < len(docs) else ""
+            has_skill = False
+
+            # 1) check skills_list metadata (stored as JSON string or list)
+            skills_list_val = meta.get("skills_list") or meta.get("skills_list_json") or None
+            if skills_list_val:
+                try:
+                    parsed = json.loads(skills_list_val) if isinstance(skills_list_val, str) else skills_list_val
+                    if isinstance(parsed, (list, tuple)):
+                        for s in parsed:
+                            if isinstance(s, str) and skill_lower == s.strip().lower():
+                                has_skill = True
+                                break
+                except Exception:
+                    # ignore parse error and continue
+                    pass
+
+            # 2) check skills_evidence_json keys
+            if not has_skill:
+                skills_evidence_val = meta.get("skills_evidence_json") or meta.get("skills_evidence")
+                if skills_evidence_val:
+                    try:
+                        evid = json.loads(skills_evidence_val) if isinstance(skills_evidence_val, str) else skills_evidence_val
+                        if isinstance(evid, dict):
+                            for k in evid.keys():
+                                if isinstance(k, str) and skill_lower == k.strip().lower():
+                                    has_skill = True
+                                    break
+                    except Exception:
+                        pass
+
+            # 3) fallback: search document text for skill token
+            if not has_skill and doc_text:
+                if skill_lower in doc_text.lower():
+                    has_skill = True
+
+            if has_skill:
+                out.append({
+                    "id": id_,
+                    "doc_preview": (doc_text[:300] if doc_text else ""),
+                    "metadata": meta
+                })
+
+        return {"count": len(out), "items": out}
     except Exception as exc:
         return {"error": str(exc)}
-
 
 
 

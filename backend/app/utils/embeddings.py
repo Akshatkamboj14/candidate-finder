@@ -1,9 +1,6 @@
-import os
 import json
-import sys
-from dotenv import load_dotenv
+import os
 
-load_dotenv()
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
 EMBED_MODEL = os.getenv("BEDROCK_EMBEDDING_MODEL_ID")
@@ -79,6 +76,7 @@ def get_embedding_for_text(text: str) -> list:
         raise RuntimeError("BEDROCK_EMBEDDING_MODEL_ID not set in env. Set it to an embedding model id (e.g. amazon.titan-embed-text-v2:0).")
 
     candidate_payloads = [
+        {"inputText": text}, 
         {"input": text},                        # common for many embedding models
         {"text": text},                         # alternative
         {"prompt": text, "max_tokens_to_sample": 0},  # completion shaped payload (to see model response)

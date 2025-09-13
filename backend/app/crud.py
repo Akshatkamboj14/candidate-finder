@@ -1,7 +1,7 @@
-from sqlalchemy.future import select
-from sqlalchemy import insert
-from .models import Candidate
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from .models import Candidate
 
 
 async def create_candidate(db: AsyncSession, candidate_dict: dict):
