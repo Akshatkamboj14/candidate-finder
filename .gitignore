@@ -1,10 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 .env
 .venv
+venv/
+ENV/
 .venv/*
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# ChromaDB
 */chroma_db/
-chroma_db
-*/__pycache__/
-*/PY
-*/__pycache__/
-backend/app/__pycache__
-backend/app/utils/__pycache__
+chroma_db/
+
+# Node/React
+node_modules/
+frontend/node_modules/
+/build
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# AWS related
+.aws/
+aws_credentials.json
+
+# Logs
+logs/
+*.log
+
+# Distribution / packaging
+dist/
+build/

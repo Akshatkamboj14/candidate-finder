@@ -1,8 +1,53 @@
-# backend/app/utils/skills.py
-import re
 import json
-from collections import Counter
+from typing import List, Dict, Any
+from .bedrock_embeddings import embedding_service
 
+class SkillExtractionService:
+    def __init__(self):
+        self.embedding_service = embedding_service
+
+    def extract_skills(self, text: str) -> List[str]:
+        """Extract technical skills from the given text."""
+        prompt = """Extract the key technical skills from the following text. Return them as a comma-separated list.
+        
+        Example output: Python, JavaScript, React, Docker
+        
+        Text: {text}
+        
+        Skills:"""
+        
+        prompt = prompt.replace("{text}", text)
+        
+        response = self.embedding_service.generate_completion(prompt)
+        skills = [s.strip() for s in response.split(",")]
+        return list(set(skills))
+
+    def find_evidence(self, text: str, skills: List[str]) -> Dict[str, List[str]]:
+        """Find evidence snippets for each skill in the text"""
+        prompt = """Find evidence snippets that demonstrate these technical skills in the given text. 
+        Return a JSON object where keys are skills and values are arrays of relevant text snippets.
+        Only include skills that have clear evidence in the text.
+        
+        Skills: {skills}
+        
+        Text: {text}
+        
+        Evidence (JSON format):"""
+        
+        prompt = prompt.replace("{skills}", ", ".join(skills))
+        prompt = prompt.replace("{text}", text)
+        
+        response = self.embedding_service.generate_completion(prompt)
+        try:
+            evidence_map = json.loads(response)
+            return {k: v for k, v in evidence_map.items() if v} # Remove empty lists
+        except:
+            return {}
+
+# Create a singleton instance
+skill_service = SkillExtractionService()
+
+# For backward compatibility, keep some of the old patterns
 SKILL_PATTERNS = {
     "pytorch": [r"\bimport\s+torch\b", r"\bfrom\s+torch\b", r"\btorch\.", r"\bPyTorch\b", r"\btorchvision\b", r"\bnn\.Module\b", r"\bconv(?:olutional)?\b", r"\bcnn\b"],
     "tensorflow": [r"\btensorflow\b", r"\btf\.keras\b", r"\bkeras\b"],
@@ -51,6 +96,7 @@ def extract_evidence_for_skills_from_text(text: str, skills: list = None, max_pe
     If skills is None: check all keys in SKILL_PATTERNS.
     Only include skills for which at least one snippet is found.
     """
+    import re
     if not text:
         return {}
     skills_to_check = skills if skills else list(SKILL_PATTERNS.keys())
@@ -80,112 +126,23 @@ def extract_evidence_for_skills_from_text(text: str, skills: list = None, max_pe
             out[skill] = uniq
     return out
 
-def extract_keywords_from_jd(jd_text: str, top_k: int = 8):
-    """
-    Lightweight extractor: picks tech-like tokens from JD.
-    Returns a list of tokens to use as skill probes.
-    """
-    if not jd_text:
-        return []
-    tokens = re.findall(r"[A-Za-z0-9\-\+\.#]+", jd_text)
-    tokens = [t for t in tokens if len(t) > 2]
-    tech_candidates = [t for t in tokens if re.search(r"[A-Z]|[0-9]|[-\+#\.]", t)]
-    if len(tech_candidates) < 3:
-        tech_candidates = tokens
-    normalized = [t.strip() for t in tech_candidates if t.lower() not in STOPWORDS]
-    counts = Counter([t.lower() for t in normalized])
-    common = [x for x,_ in counts.most_common(top_k)]
-    seen=set(); out=[]
-    for t in normalized:
-        tl = t.lower()
-        if tl in common and tl not in seen:
-            seen.add(tl); out.append(t)
-    return out[:top_k]
+def extract_keywords_from_jd(text: str, top_k: int = 8) -> List[str]:
+    """Extract keywords from job description"""
+    return skill_service.extract_skills(text)[:top_k] if top_k else skill_service.extract_skills(text)
 
-def find_evidence_for_skills(docs, skills, max_per_doc_skill=6):
-    """
-    Enhanced evidence retriever for RAG.
-
-    Priority:
-      1) If the document metadata contains a 'skills_evidence' dict, prefer snippets from there.
-         The dict is expected as { skill_name: [snippet, ...], ... } (skill names may be any case).
-      2) Otherwise, fall back to scanning the document text for the skill tokens (existing logic).
-
-    Args:
-      docs: list of dicts, each with at least 'id' and 'document', optionally 'metadata' (dict).
-      skills: list of skill tokens (strings) extracted from JD.
-      max_per_doc_skill: maximum snippets to return per skill per doc.
-
-    Returns:
-      dict mapping doc_id -> list of evidence snippet strings (deduped, limited).
-    """
-    out = {}
-    if not docs:
-        return {}
-
-    # normalize requested skills to lowercase for matching
-    skill_norms = [s.lower() for s in (skills or [])]
-
-    # If no skills requested, return empty lists for each doc (consistent with prior behavior)
-    if not skill_norms:
-        for d in docs:
-            out[d.get("id")] = []
-        return out
-
-    for d in docs:
-        doc_id = d.get("id")
-        meta = (d.get("metadata") or {}) if isinstance(d.get("metadata"), dict) else {}
-        doc_text = (d.get("document", "") or "")
-        snippets_for_doc = []
-
-        # 1) Prefer metadata evidence if available
-        skills_evidence = {}
-
-        # metadata may carry JSON string or dict; try both safely
-        if "skills_evidence_json" in meta and meta["skills_evidence_json"]:
-            try:
-                skills_evidence = json.loads(meta["skills_evidence_json"])
-            except Exception:
-                # best-effort: ignore parse errors and continue
-                skills_evidence = {}
-        elif "skills_evidence" in meta and isinstance(meta["skills_evidence"], dict):
-            skills_evidence = meta["skills_evidence"]
-
-        if isinstance(skills_evidence, dict) and skills_evidence:
-            for sk in skill_norms:
-                for meta_skill_key, snippets in skills_evidence.items():
-                    if meta_skill_key and meta_skill_key.lower() == sk:
-                        if isinstance(snippets, (list, tuple)):
-                            for s in snippets[:max_per_doc_skill]:
-                                if s and s not in snippets_for_doc:
-                                    snippets_for_doc.append(s)
-                        break
-            if snippets_for_doc:
-                out[doc_id] = snippets_for_doc[: max_per_doc_skill * len(skill_norms)]
-                continue
-
-        # 2) Fallback: scan document text for the skill tokens (original behavior)
-        found_snippets = []
-        for s in skill_norms:
-            for m in re.finditer(re.escape(s), doc_text):
-                start = max(0, m.start() - 80)
-                end = min(len(doc_text), m.end() + 80)
-                snippet = (d.get("document","") or "")[start:end].replace("\n", " ")
-                if snippet not in found_snippets:
-                    found_snippets.append(snippet)
-                if len(found_snippets) >= max_per_doc_skill:
-                    break
-            if len(found_snippets) >= max_per_doc_skill:
-                break
-
-        # dedupe preserving order (should already be unique)
-        seen = set(); uniq = []
-        for sn in found_snippets:
-            if sn not in seen:
-                seen.add(sn); uniq.append(sn)
-            if len(uniq) >= max_per_doc_skill:
-                break
-
-        out[doc_id] = uniq
-
-    return out
+def find_evidence_for_skills(docs: List[Dict[str, Any]], skills: List[str]) -> Dict[str, List[str]]:
+    """Find evidence for skills in documents"""
+    evidence_map = {}
+    
+    for doc in docs:
+        doc_text = doc.get('document', '')
+        doc_id = doc.get('id', '')
+        
+        if doc_text and doc_id:
+            doc_evidence = skill_service.find_evidence(doc_text, skills)
+            for skill, snippets in doc_evidence.items():
+                if skill not in evidence_map:
+                    evidence_map[skill] = []
+                evidence_map[skill].extend(snippets)
+    
+    return evidence_map

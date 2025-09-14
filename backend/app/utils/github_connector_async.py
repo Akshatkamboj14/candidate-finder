@@ -182,10 +182,50 @@ def fetch_and_index_github_users_concurrent(
 
                 profile_id = f"github:{username}"
                 try:
+                    # Helper function to sanitize metadata values
+                    def sanitize_value(value):
+                        if value is None:
+                            return ""
+                        if isinstance(value, (str, int, float, bool)):
+                            return value
+                        return str(value)
+
                     meta = {
                         "source": "github",
                         "username": username,
-                        "profile_url": user_obj.get("html_url"),
+                        "name": sanitize_value(user_obj.get("name")),
+                        "bio": sanitize_value(user_obj.get("bio")),
+                        "location": sanitize_value(user_obj.get("location")),
+                        "email": sanitize_value(user_obj.get("email")),
+                        "company": sanitize_value(user_obj.get("company")),
+                        "blog": sanitize_value(user_obj.get("blog")),
+                        "twitter_username": sanitize_value(user_obj.get("twitter_username")),
+                        "public_repos": sanitize_value(user_obj.get("public_repos", 0)),
+                        "public_gists": sanitize_value(user_obj.get("public_gists", 0)),
+                        "followers": sanitize_value(user_obj.get("followers", 0)),
+                        "following": sanitize_value(user_obj.get("following", 0)),
+                        "created_at": sanitize_value(user_obj.get("created_at")),
+                        "updated_at": sanitize_value(user_obj.get("updated_at")),
+                        "profile_url": sanitize_value(user_obj.get("html_url")),
+                        
+                        # Add repository URLs as a JSON string
+                        "repository_urls": json.dumps([
+                            repo.get("html_url", "") for repo in (top_repos or [])
+                            if repo.get("html_url")
+                        ]),
+                        
+                        # Add repository details as a JSON string
+                        "top_repositories": json.dumps([
+                            {
+                                "name": sanitize_value(repo.get("name")),
+                                "description": sanitize_value(repo.get("description")),
+                                "language": sanitize_value(repo.get("language")),
+                                "stars": sanitize_value(repo.get("stargazers_count", 0)),
+                                "forks": sanitize_value(repo.get("forks_count", 0)),
+                                "url": sanitize_value(repo.get("html_url"))
+                            }
+                            for repo in (top_repos or [])
+                        ])
                     }
 
                     # Prefer the structured extractor from utils/skills.py if available

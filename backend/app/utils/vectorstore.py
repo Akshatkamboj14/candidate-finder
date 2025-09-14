@@ -1,8 +1,12 @@
-# backend/app/utils/vectorstore.py
 import os
 import chromadb
+from .bedrock_embeddings import embedding_service
 
 PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+COL_NAME = "profiles"
+import os
+
+PERSIST_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "chroma_db")
 COL_NAME = "profiles"
 
 
@@ -75,27 +79,54 @@ except Exception:
         except Exception as e:
             raise RuntimeError(f"Failed to create or get Chroma collection: {e}")
 
+def clear_collection():
+    """Clear all data from the collection"""
+    try:
+        global collection
+        # Get all document IDs
+        result = collection.get()
+        if result and "ids" in result and result["ids"]:
+            # Delete all documents
+            collection.delete(ids=result["ids"])
+            
+        # Force persist if available
+        if hasattr(collection, "persist"):
+            try:
+                collection.persist()
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        logger.error(f"Failed to clear collection: {str(e)}")
+        return False
+
 def upsert_profile(profile_id: str, text: str, vector: list, metadata: dict = None):
     metadata = metadata or {}
-    # upsert vs add: try multiple API names depending on version
     try:
-        collection.upsert(
+        # First try to delete any existing profile to ensure clean upsert
+        try:
+            collection.delete(ids=[profile_id])
+        except Exception:
+            pass  # Ignore if profile doesn't exist
+            
+        # Now add the new profile
+        collection.add(
             ids=[profile_id],
             metadatas=[metadata],
             documents=[text],
             embeddings=[vector]
         )
-    except Exception:
-        # older versions sometimes use add
-        try:
-            collection.add(
-                ids=[profile_id],
-                metadatas=[metadata],
-                documents=[text],
-                embeddings=[vector]
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to upsert/add profile to Chroma collection: {e}")
+        
+        # Force persist to disk if available
+        if hasattr(collection, "persist"):
+            try:
+                collection.persist()
+            except Exception:
+                pass
+                
+    except Exception as e:
+        logger.error(f"Failed to upsert profile {profile_id}: {str(e)}")
+        raise RuntimeError(f"Failed to upsert/add profile to Chroma collection: {e}")
 
 
 

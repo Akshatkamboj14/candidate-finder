@@ -2,10 +2,12 @@ fastapi
 uvicorn[standard]
 python-multipart
 sqlalchemy
-databases
+databases[aiosqlite]
 pydantic
-pdfminer.six
 chromadb
 boto3
 python-dotenv
 requests
+langchain-community
+langchain
+langchain_core
