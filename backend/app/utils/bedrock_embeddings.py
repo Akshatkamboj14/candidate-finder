@@ -1,14 +1,23 @@
 import json
 from typing import List, Optional
 from .bedrock_config import bedrock_config
+from .cache import cache
 
 class EmbeddingService:
     def __init__(self):
         self.client = bedrock_config.get_bedrock_client()
         self.model_id = bedrock_config.embedding_model_id
+        self.cache = cache
 
     def get_embedding_for_text(self, text: str) -> List[float]:
-        """Get embedding from AWS Bedrock Titan model"""
+        """Get embedding from AWS Bedrock Titan model with caching"""
+        # Check cache first
+        cache_key = f"embedding_{self.model_id}_{text}"
+        cached_embedding = self.cache.get(cache_key)
+        if cached_embedding is not None:
+            print("[DEBUG] Using cached embedding")
+            return cached_embedding
+
         try:
             # Format request based on model type
             if "titan-embed" in self.model_id.lower():
@@ -40,7 +49,10 @@ class EmbeddingService:
             if not embedding:
                 raise ValueError("No embedding returned from model")
                 
-            return [float(x) for x in embedding]
+            embedding_floats = [float(x) for x in embedding]
+            # Cache the result
+            self.cache.set(cache_key, embedding_floats)
+            return embedding_floats
         except Exception as e:
             raise RuntimeError(f"Failed to get embedding from Bedrock: {str(e)}")
 
