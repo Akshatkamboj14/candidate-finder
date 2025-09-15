@@ -1,6 +1,6 @@
 import uuid
-from ..utils.embeddings import get_embedding_for_text
-from ..utils.vectorstore import query_similar
+from ..infrastructure.aws.bedrock_embeddings import get_embedding_for_text
+from ..infrastructure.aws.vectorstore import query_similar
 
 class JobService:
     def __init__(self):
@@ -50,7 +50,7 @@ class JobService:
                     confidence = "HIGH" if similarity >= 0.45 else ("MEDIUM" if similarity >= 0.35 else "LOW")  # Adjusted thresholds for more reasonable confidence levels
                     
                     # Extract skills from candidate
-                    from ..utils.skills import extract_keywords_from_jd, find_evidence_for_skills
+                    from ..features.skills.skills import extract_keywords_from_jd, find_evidence_for_skills
                     candidate_skills = extract_keywords_from_jd(candidate_text)
                     skill_evidence = find_evidence_for_skills([candidate], candidate_skills)
                     

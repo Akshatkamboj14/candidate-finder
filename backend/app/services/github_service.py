@@ -2,26 +2,22 @@ import time
 import uuid
 from typing import Dict, Any
 from fastapi import BackgroundTasks
-from ..utils.github_connector_async import fetch_and_index_github_users_concurrent
-from ..utils.vectorstore import collection
+from ..features.github.github_connector_async import GitHubConnectorAsync
+from ..infrastructure.aws.vectorstore import collection, clear_collection
 import json
 
 class GitHubService:
     def __init__(self):
         self.ingest_jobs: Dict[str, Dict[str, Any]] = {}
+        self.github = GitHubConnectorAsync()
         
     async def clear_database(self) -> dict:
         """Clear all data from the collection"""
-        try:
-            from ..utils.vectorstore import clear_collection, collection
-            
-            # First verify we have access to the collection
+        try:            
             if not collection:
                 return {"success": False, "error": "Database collection is not initialized"}
                 
-            # Try to clear the collection
             if clear_collection():
-                # Verify the collection is actually empty
                 try:
                     result = collection.get()
                     if not result or not result.get("ids"):
@@ -35,36 +31,35 @@ class GitHubService:
         except Exception as e:
             return {"success": False, "error": f"Database clear error: {str(e)}"}
 
-    async def start_fetch_job(self, language: str | None, location: str | None,
-                            min_followers: int | None, min_repos: int | None,
-                            max_users: int, per_user_repos: int, 
-                            background_tasks: BackgroundTasks) -> dict:
+    async def start_fetch_job(
+        self, 
+        language: str | None, 
+        location: str | None,
+        min_followers: int | None, 
+        min_repos: int | None,
+        max_users: int, 
+        per_user_repos: int, 
+        background_tasks: BackgroundTasks
+    ) -> dict:
         """Start a background job to fetch GitHub users"""
-        # Start with type:user as base query
         query_parts = ["type:user"]
         
         if language:
-            # Search for users who have repositories in the specified language
             query_parts.append(f"language:{language}")
             
         if location:
-            # Make location search case-insensitive and fuzzy
             location_clean = location.strip().lower()
             query_parts.append(f"location:*{location_clean}*")
             
         if min_followers:
-            # Use greater than or equal for followers
             query_parts.append(f"followers:>={min_followers}")
             
         if min_repos:
-            # Use greater than or equal for repos
             query_parts.append(f"repos:>={min_repos}")
             
-        # Sort by followers to get more relevant users first
         query_parts.append("sort:followers")
         
         query = " ".join(query_parts)
-        print(f"GitHub Search Query: {query}")  # For debugging
             
         job_id = str(uuid.uuid4())
         self.ingest_jobs[job_id] = {
@@ -90,7 +85,6 @@ class GitHubService:
     async def inspect_collection(self) -> dict:
         """Get an overview of the vector collection"""
         try:
-            # Get all items instead of just peeking
             result = collection.get(
                 include=["documents", "metadatas"]
             )
@@ -102,7 +96,6 @@ class GitHubService:
             docs = result.get("documents", [])
             metas = result.get("metadatas", [])
             
-            # Ensure we have matching lengths
             min_len = min(len(ids), len(docs), len(metas))
             
             out = [
@@ -119,8 +112,6 @@ class GitHubService:
                 "items": out
             }
         except Exception as e:
-            import traceback
-            print(f"Collection inspection error: {str(e)}\n{traceback.format_exc()}")
             return {"error": str(e)}
 
     async def filter_by_skill(self, skill: str, max_results: int = 100) -> dict:
@@ -157,7 +148,7 @@ class GitHubService:
     def _run_fetch_job(self, job_id: str, query: str, max_users: int, per_user_repos: int) -> None:
         """Execute the GitHub fetch job"""
         try:
-            res = fetch_and_index_github_users_concurrent(
+            res = self.github.fetch_and_index_github_users_concurrent(
                 query=query,
                 max_users=max_users,
                 per_user_repos=per_user_repos,
@@ -176,7 +167,6 @@ class GitHubService:
 
     def _check_skill_match(self, skill_lower: str, meta: dict, doc_text: str) -> bool:
         """Check if a skill matches in metadata or document text"""
-        # Check skills_list metadata
         skills_list_val = meta.get("skills_list") or meta.get("skills_list_json")
         if skills_list_val:
             try:
@@ -200,7 +190,6 @@ class GitHubService:
                     ):
                         return True
 
-        # Check skills_evidence_json
         skills_evidence_val = meta.get("skills_evidence_json") or meta.get("skills_evidence")
         if skills_evidence_val:
             try:
@@ -218,5 +207,4 @@ class GitHubService:
             except Exception:
                 pass
 
-        # Check document text
         return bool(doc_text and skill_lower in doc_text.lower())

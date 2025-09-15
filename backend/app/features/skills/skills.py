@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict, Any
-from .bedrock_embeddings import embedding_service
+from ...infrastructure.aws.bedrock_embeddings import embedding_service
 
 class SkillExtractionService:
     def __init__(self):

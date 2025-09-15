@@ -1,8 +1,8 @@
 from typing import Optional, List, Dict, Any
-from ..utils.embeddings import get_embedding_for_text, get_text_completion
-from ..utils.skills import extract_keywords_from_jd, find_evidence_for_skills
-from ..utils.vectorstore import query_similar
-from .job_service import JobService
+from ...infrastructure.aws.bedrock_embeddings import get_embedding_for_text, get_text_completion
+from ...features.skills.skills import extract_keywords_from_jd, find_evidence_for_skills, SKILL_PATTERNS
+from ...infrastructure.aws.vectorstore import query_similar
+from ...services.job_service import JobService
 
 class RAGService:
     def __init__(self):
@@ -103,7 +103,6 @@ class RAGService:
                     pass
         
         # Extract from document text using skill patterns
-        from ..utils.skills import SKILL_PATTERNS
         import re
         doc_text = doc.get("document", "").lower()
         for skill, patterns in SKILL_PATTERNS.items():

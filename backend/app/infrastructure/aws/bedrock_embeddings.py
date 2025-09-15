@@ -1,7 +1,7 @@
 import json
-from typing import List, Optional
+from typing import List, Optional, Union
 from .bedrock_config import bedrock_config
-from .cache import cache
+from ..cache.cache import cache
 
 class EmbeddingService:
     def __init__(self):
@@ -114,3 +114,11 @@ class EmbeddingService:
 
 # Create a singleton instance
 embedding_service = EmbeddingService()
+
+def get_embedding_for_text(text: str) -> List[float]:
+    """Helper function to get embeddings from the singleton service"""
+    return embedding_service.get_embedding_for_text(text)
+
+def get_text_completion(prompt: str, context: Optional[str] = None) -> str:
+    """Helper function to get text completion from the singleton service"""
+    return embedding_service.get_text_completion(prompt, context)

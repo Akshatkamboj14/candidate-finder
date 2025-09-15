@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Form
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from ..services.job_service import JobService
-from ..services.rag_service import RAGService
+from ..features.rag.rag_service import RAGService
 
 router = APIRouter()
 job_service = JobService()
