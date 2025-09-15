@@ -26,15 +26,16 @@ class SkillExtractionService:
 
     def find_evidence(self, text: str, skills: List[str]) -> Dict[str, List[str]]:
         """Find evidence snippets for each skill in the text"""
-        prompt = """Find evidence snippets that demonstrate these technical skills in the given text. 
-        Return a JSON object where keys are skills and values are arrays of relevant text snippets.
+        prompt = """Find evidence snippets that demonstrate these technical skills in the given text.
+        Return ONLY a valid JSON object where keys are skills and values are arrays of relevant text snippets.
         Only include skills that have clear evidence in the text.
+        The response must start with { and end with } and contain no other text.
         
         Skills: {skills}
         
         Text: {text}
         
-        Evidence (JSON format):"""
+        Evidence:"""
         
         prompt = prompt.replace("{skills}", ", ".join(skills))
         prompt = prompt.replace("{text}", text)
@@ -42,11 +43,23 @@ class SkillExtractionService:
         response = self.embedding_service.get_text_completion(prompt)
         if not response:
             return {}
+            
+        # Clean up response to extract just the JSON object
+        response = response.strip()
+        start_idx = response.find('{')
+        end_idx = response.rfind('}')
+        
+        if start_idx == -1 or end_idx == -1:
+            print("[WARNING] No JSON object found in response")
+            return {}
+            
+        json_str = response[start_idx:end_idx + 1]
+        
         try:
-            evidence_map = json.loads(response)
+            evidence_map = json.loads(json_str)
             return {k: v for k, v in evidence_map.items() if v} # Remove empty lists
         except json.JSONDecodeError:
-            print(f"[WARNING] Failed to parse evidence response as JSON: {response[:200]}...")
+            print(f"[WARNING] Failed to parse evidence response as JSON: {json_str[:200]}...")
             return {}
         except Exception as e:
             print(f"[ERROR] Error processing evidence response: {str(e)}")

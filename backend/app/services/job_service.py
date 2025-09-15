@@ -47,7 +47,7 @@ class JobService:
                     
                     # Calculate cosine similarity
                     similarity = dot(jd_vec, candidate_vec)/(norm(jd_vec)*norm(candidate_vec))
-                    confidence = "HIGH" if similarity >= 0.85 else ("MEDIUM" if similarity >= 0.70 else "LOW")
+                    confidence = "HIGH" if similarity >= 0.45 else ("MEDIUM" if similarity >= 0.35 else "LOW")  # Adjusted thresholds for more reasonable confidence levels
                     
                     # Extract skills from candidate
                     from ..utils.skills import extract_keywords_from_jd, find_evidence_for_skills
