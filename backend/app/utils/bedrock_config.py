@@ -10,15 +10,12 @@ class BedrockConfig:
             print("[ERROR] BEDROCK_REGION not found in environment")
             raise ValueError("BEDROCK_REGION environment variable is required")
             
-        self.completion_model_id = os.getenv("BEDROCK_COMPLETION_MODEL_ID")
-        if not self.completion_model_id:
-            print("[ERROR] BEDROCK_COMPLETION_MODEL_ID not found in environment")
-            raise ValueError("BEDROCK_COMPLETION_MODEL_ID environment variable is required")
+        # Default to latest stable model versions if not specified
+        self.completion_model_id = os.getenv("BEDROCK_COMPLETION_MODEL_ID", "anthropic.claude-v2")
+        print(f"[INFO] Using completion model: {self.completion_model_id}")
             
-        self.embedding_model_id = os.getenv("BEDROCK_EMBEDDING_MODEL_ID")
-        if not self.embedding_model_id:
-            print("[ERROR] BEDROCK_EMBEDDING_MODEL_ID not found in environment")
-            raise ValueError("BEDROCK_EMBEDDING_MODEL_ID environment variable is required")
+        self.embedding_model_id = os.getenv("BEDROCK_EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v1")
+        print(f"[INFO] Using embedding model: {self.embedding_model_id}")
             
         self._client = None
         

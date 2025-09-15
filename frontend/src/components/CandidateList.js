@@ -41,26 +41,43 @@ export const CandidateList = ({ candidates }) => {
         return (
           <Card key={candidate.id} width="100%">
             <CardBody>
-              <Stack spacing={4}>
-                {/* Header with name and profile link */}
+                <Stack spacing={4}>
+                {/* Header with name, profile link, and semantic match score */}
                 <Flex 
                   justify="space-between" 
                   align="flex-start"
                   flexDir={{ base: "column", md: "row" }}
                   gap={3}
                 >
-                  <Box>
-                    <Heading size="md">
-                      {candidate.metadata?.name || candidate.metadata?.username || candidate.id}
-                    </Heading>
+                  <Box flex="1">
+                    <Flex align="center" gap={3}>
+                      <Heading size="md">
+                        {candidate.metadata?.name || candidate.metadata?.username || candidate.id}
+                      </Heading>
+                      <Badge 
+                        colorScheme={
+                          candidate.confidence === "HIGH" ? "green" :
+                          candidate.confidence === "MEDIUM" ? "yellow" : "gray"
+                        }
+                        fontSize="sm"
+                      >
+                        {candidate.similarity_score}% Match
+                      </Badge>
+                      <Badge 
+                        colorScheme={
+                          candidate.confidence === "HIGH" ? "green" :
+                          candidate.confidence === "MEDIUM" ? "yellow" : "red"
+                        }
+                      >
+                        {candidate.confidence} Confidence
+                      </Badge>
+                    </Flex>
                     {candidate.metadata?.bio && (
                       <Text color="gray.600" mt={1}>
                         {candidate.metadata.bio}
                       </Text>
                     )}
-                  </Box>
-                  
-                  <Flex gap={2} flexWrap="wrap">
+                  </Box>                  <Flex gap={2} flexWrap="wrap">
                     {candidate.metadata?.profile_url && (
                       <Button 
                         as="a" 

@@ -18,8 +18,10 @@ class SkillExtractionService:
         
         prompt = prompt.replace("{text}", text)
         
-        response = self.embedding_service.generate_completion(prompt)
-        skills = [s.strip() for s in response.split(",")]
+        response = self.embedding_service.get_text_completion(prompt)
+        if not response:
+            return []
+        skills = [s.strip() for s in response.split(",") if s.strip()]
         return list(set(skills))
 
     def find_evidence(self, text: str, skills: List[str]) -> Dict[str, List[str]]:
@@ -37,11 +39,17 @@ class SkillExtractionService:
         prompt = prompt.replace("{skills}", ", ".join(skills))
         prompt = prompt.replace("{text}", text)
         
-        response = self.embedding_service.generate_completion(prompt)
+        response = self.embedding_service.get_text_completion(prompt)
+        if not response:
+            return {}
         try:
             evidence_map = json.loads(response)
             return {k: v for k, v in evidence_map.items() if v} # Remove empty lists
-        except:
+        except json.JSONDecodeError:
+            print(f"[WARNING] Failed to parse evidence response as JSON: {response[:200]}...")
+            return {}
+        except Exception as e:
+            print(f"[ERROR] Error processing evidence response: {str(e)}")
             return {}
 
 # Create a singleton instance
