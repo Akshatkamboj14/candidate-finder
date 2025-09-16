@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:8000/api';
+// Use relative URLs when running in production (nginx reverse proxy)
+// Use full URL when running in development
+const API_BASE = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api';
 
 export const jobsApi = {
   createJob: async (jd, k = 10) => {
@@ -46,3 +48,5 @@ export const githubApi = {
     return response.data;
   }
 };
+
+// Reading the API service file to understand current configuration

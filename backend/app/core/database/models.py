@@ -13,7 +13,7 @@ class Candidate(Base):
     source = Column(String, nullable=True)
     filename = Column(String, nullable=True)
     profile_text = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    profile_metadata = Column(JSON, nullable=True)  # Renamed from 'metadata'
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -23,6 +23,6 @@ class Candidate(Base):
                 "source": self.source,
                 "filename": self.filename,
                 "profile_text": self.profile_text,
-                "metadata": self.metadata,
+                "profile_metadata": self.profile_metadata,  # Updated field name
                 "created_at": self.created_at.isoformat() if self.created_at else None,
             }

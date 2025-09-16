@@ -1,0 +1,15 @@
+# Kubernetes manifests
+k8s/
+*.yaml
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Environment files
+.env
+.env.local
+
+# Build artifacts
+*/build/
+*/dist/

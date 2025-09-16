@@ -2,13 +2,14 @@ import os
 import chromadb
 from .bedrock_embeddings import embedding_service
 
+# Use CHROMA_PERSIST_DIR from environment or fallback to relative path
 PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 COL_NAME = "profiles"
-import os
 
-PERSIST_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "chroma_db")
-COL_NAME = "profiles"
-
+# Ensure the persist directory exists
+if not os.path.exists(PERSIST_DIR):
+    os.makedirs(PERSIST_DIR, exist_ok=True)
+    print(f"[INFO] Created ChromaDB persist directory: {PERSIST_DIR}")
 
 try:
     from chromadb.config import Settings
