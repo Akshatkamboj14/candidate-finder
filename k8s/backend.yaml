@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  labels:
+    app: backend
+spec:
+  replicas: 1  # Single replica for SQLite database
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: akshat1414/candidate-finder-backend:latest
+        imagePullPolicy: Always  # Pull from Docker Hub
+        ports:
+        - containerPort: 8000
+        env:
+        - name: PYTHONPATH
+          value: "/app"
+        # Configuration from ConfigMap
+        - name: BEDROCK_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: BEDROCK_REGION
+        - name: BEDROCK_COMPLETION_MODEL_ID
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: BEDROCK_COMPLETION_MODEL_ID
+        - name: BEDROCK_EMBEDDING_MODEL_ID
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: BEDROCK_EMBEDDING_MODEL_ID
+        - name: CHROMA_PERSIST_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: CHROMA_PERSIST_DIR
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: DATABASE_URL
+        - name: DEBUG
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: DEBUG
+        # Secrets
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: AWS_SECRET_ACCESS_KEY
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: GITHUB_TOKEN
+        volumeMounts:
+        - name: chroma-data
+          mountPath: /app/chroma_db
+        - name: sqlite-data
+          mountPath: /app/db
+      volumes:
+      - name: chroma-data
+        persistentVolumeClaim:
+          claimName: chroma-storage
+      - name: sqlite-data
+        persistentVolumeClaim:
+          claimName: sqlite-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+  - protocol: TCP
+    port: 8000
+    targetPort: 8000
+  type: ClusterIP
