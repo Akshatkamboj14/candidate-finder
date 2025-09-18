@@ -14,6 +14,7 @@ import { JobForm } from './components/JobForm';
 import { GithubSearchForm } from './components/GithubSearchForm';
 import { CandidateList } from './components/CandidateList';
 import { ExistingCandidatesList } from './components/ExistingCandidatesList';
+import K8sQueryForm from './components/K8sQueryForm';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const queryClient = new QueryClient();
@@ -49,6 +50,7 @@ function App() {
                 <Tab>Find by Job Description</Tab>
                 <Tab>Search GitHub Users</Tab>
                 <Tab>View All Candidates</Tab>
+                <Tab>K8s Assistant</Tab>
               </TabList>
               
               <TabPanels>
@@ -88,6 +90,10 @@ function App() {
 
                 <TabPanel>
                   <ExistingCandidatesList />
+                </TabPanel>
+
+                <TabPanel>
+                  <K8sQueryForm />
                 </TabPanel>
               </TabPanels>
             </Tabs>

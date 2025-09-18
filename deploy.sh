@@ -29,10 +29,12 @@ docker build -t candidate-finder-frontend:latest ./frontend
 # Apply Kubernetes manifests
 echo -e "${YELLOW}📦 Applying Kubernetes manifests...${NC}"
 kubectl apply -f k8s/storage.yaml
+kubectl apply -f k8s/storageclass.yaml
 kubectl apply -f k8s/configmap.yaml
 kubectl apply -f k8s/app-configmap.yaml
 kubectl apply -f k8s/backend.yaml
 kubectl apply -f k8s/frontend.yaml
+kubectl apply -f k8s/.
 
 # Show status
 echo -e "${GREEN}✅ Deployment completed!${NC}"

@@ -62,7 +62,7 @@ load_environment()
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import jobs, github
+from .routers import jobs, github, k8s
 from .core.database.database import init_db
 
 # Create FastAPI app
@@ -106,6 +106,7 @@ print(f"[DEBUG] BEDROCK_REGION: {os.getenv('BEDROCK_REGION', 'Not Set')}")
 # Include routers
 app.include_router(jobs.router, prefix="/api")
 app.include_router(github.router, prefix="/api")
+app.include_router(k8s.router, prefix="/api/k8s", tags=["k8s"])
 
 # Health check endpoint for Kubernetes
 @app.get("/health")

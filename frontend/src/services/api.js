@@ -49,4 +49,11 @@ export const githubApi = {
   }
 };
 
+export const k8sApi = {
+  queryK8s: async (query) => {
+    const response = await axios.post(`${API_BASE}/k8s/query`, { query });
+    return response.data;
+  }
+};
+
 // Reading the API service file to understand current configuration
