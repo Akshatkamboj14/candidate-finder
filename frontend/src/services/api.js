@@ -1,8 +1,8 @@
 import axios from 'axios';
 
 // Use relative URLs when running in production (nginx reverse proxy)
-// Use EC2 public IP when running in development on EC2
-const API_BASE = process.env.NODE_ENV === 'production' ? '/api' : 'http://98.80.121.38:8000/api';
+// Use full URL when running in development
+const API_BASE = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api';
 
 export const jobsApi = {
   createJob: async (jd, k = 10) => {
@@ -16,21 +16,6 @@ export const jobsApi = {
     if (jobId) formData.append('job_id', jobId);
     if (jd) formData.append('jd', jd);
     const response = await axios.post(`${API_BASE}/rag`, formData);
-    return response.data;
-  },
-
-  ragEnhanced: async (query, jobId = null, jd = null, useLanggraph = true) => {
-    const formData = new FormData();
-    formData.append('query', query);
-    formData.append('use_langgraph', useLanggraph);
-    if (jobId) formData.append('job_id', jobId);
-    if (jd) formData.append('jd', jd);
-    const response = await axios.post(`${API_BASE}/rag_enhanced`, formData);
-    return response.data;
-  },
-
-  getWorkflowInfo: async () => {
-    const response = await axios.get(`${API_BASE}/workflow_info`);
     return response.data;
   }
 };
