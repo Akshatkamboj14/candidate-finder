@@ -38,54 +38,54 @@ fi
 
 
 
-# echo "Updating package lists..."
-# sudo apt update -y
-# sudo apt upgrade -y
+echo "Updating package lists..."
+sudo apt update -y
+sudo apt upgrade -y
 
-# # -------------------------------
-# # Install Node.js & npm (for React)
-# # -------------------------------
-# echo "Installing Node.js and npm..."
-# # Using NodeSource PPA for latest LTS Node
-# curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-# sudo apt install -y nodejs
-# echo "Node.js version:"
-# node -v
-# echo "npm version:"
-# npm -v
+# -------------------------------
+# Install Node.js & npm (for React)
+# -------------------------------
+echo "Installing Node.js and npm..."
+# Using NodeSource PPA for latest LTS Node
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
+echo "Node.js version:"
+node -v
+echo "npm version:"
+npm -v
 
-# # -------------------------------
-# # Install Docker
-# # -------------------------------
-# echo "Installing Docker..."
-# sudo apt install -y \
-#     ca-certificates \
-#     curl \
-#     gnupg \
-#     lsb-release
+# -------------------------------
+# Install Docker
+# -------------------------------
+echo "Installing Docker..."
+sudo apt install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
 
-# # Add Docker official GPG key
-# sudo mkdir -p /etc/apt/keyrings
-# curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+# Add Docker official GPG key
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 
-# # Set up repository
-# echo \
-#   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-#   $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+# Set up repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# # Install Docker Engine
-# sudo apt update -y
-# sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+# Install Docker Engine
+sudo apt update -y
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# # Enable Docker service
-# sudo systemctl enable docker
-# sudo systemctl start docker
-# sudo usermod -aG docker $USER && newgrp docker
+# Enable Docker service
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker $USER && newgrp docker
 
-# echo "Docker version:"
-# docker --version
-# echo "Docker Compose version:"
-# docker compose version
+echo "Docker version:"
+docker --version
+echo "Docker Compose version:"
+docker compose version
 
-# sudo apt install python3.12-venv
-# python3 -m venv .venv
+sudo apt install python3.12-venv
+python3 -m venv .venv

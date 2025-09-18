@@ -2,10 +2,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any
 import json
-from ..features.k8s.k8s_assistant import K8sAssistant
+from ..features.k8s.k8s_langgraph_assistant import K8sLangGraphAssistant
 
 router = APIRouter()
-k8s_assistant = K8sAssistant()
+k8s_assistant = K8sLangGraphAssistant()
 
 class K8sQuery(BaseModel):
     query: str
@@ -13,7 +13,14 @@ class K8sQuery(BaseModel):
 @router.post("/query")
 async def process_k8s_query(query: K8sQuery) -> Dict[str, Any]:
     """
-    Process a natural language query about Kubernetes resources.
+    Process a natural language query about Kubernetes resources using LangGraph workflow.
+    
+    The LangGraph workflow includes:
+    1. Security validation and access control
+    2. Intent parsing with LLM and fallback
+    3. Resource name resolution
+    4. Kubectl command execution
+    5. AI-enhanced response generation
     
     Examples:
     - "list all pods"

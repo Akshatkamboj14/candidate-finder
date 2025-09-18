@@ -11,5 +11,6 @@ requests
 langchain-community
 langchain
 langchain_core
+langgraph
 
 # Reading file content

@@ -1,11 +1,25 @@
-from typing import Dict, Any
+from typing import Dict, Any, TypedDict, Annotated
 import subprocess
 import json
 import re
 import logging
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.tools import tool
 from ...infrastructure.aws.bedrock_embeddings import get_text_completion
 
 logger = logging.getLogger(__name__)
+
+class K8sState(TypedDict):
+    """State for the K8s Assistant workflow"""
+    query: str
+    parsed_intent: Dict[str, Any]
+    security_check: Dict[str, Any]
+    kubectl_result: str
+    enhanced_response: str
+    error: str
+    messages: list
 
 class K8sAssistant:
     """
@@ -16,55 +30,103 @@ class K8sAssistant:
     def __init__(self):
         self.supported_resources = [
             "pods", "services", "deployments", "configmaps", 
-            "ingress", "nodes", "namespaces", "persistentvolumes", "pvc"
+            "ingress", "nodes", "namespaces", "persistentvolumes", "persistentvolumeclaims"
         ]
         self.supported_actions = [
             "list", "get", "describe", "logs"
         ]
         self.banned_actions = ["delete", "edit", "patch", "apply", "create"]
         self.restricted_resources = ["secrets"]
+        
+        # Build LangGraph workflow
+        self.workflow = self._build_workflow()
+    
+    def _build_workflow(self) -> StateGraph:
+        """Build the LangGraph workflow for K8s query processing"""
+        
+        # Define the workflow graph
+        workflow = StateGraph(K8sState)
+        
+        # Add nodes
+        workflow.add_node("security_check", self._security_check_node)
+        workflow.add_node("parse_intent", self._parse_intent_node)
+        workflow.add_node("resolve_resources", self._resolve_resources_node)
+        workflow.add_node("execute_kubectl", self._execute_kubectl_node)
+        workflow.add_node("enhance_response", self._enhance_response_node)
+        workflow.add_node("format_output", self._format_output_node)
+        
+        # Define the workflow edges
+        workflow.set_entry_point("security_check")
+        
+        # Security check routing
+        workflow.add_conditional_edges(
+            "security_check",
+            self._route_after_security,
+            {
+                "error": "format_output",
+                "continue": "parse_intent"
+            }
+        )
+        
+        # Parse intent routing
+        workflow.add_conditional_edges(
+            "parse_intent",
+            self._route_after_parsing,
+            {
+                "error": "format_output",
+                "continue": "resolve_resources"
+            }
+        )
+        
+        # Continue workflow
+        workflow.add_edge("resolve_resources", "execute_kubectl")
+        workflow.add_edge("execute_kubectl", "enhance_response")
+        workflow.add_edge("enhance_response", "format_output")
+        workflow.add_edge("format_output", END)
+        
+        return workflow.compile()
 
     async def process_query(self, query: str) -> Dict[str, Any]:
         """
-        Main entry point for processing K8s queries.
+        Process a natural language Kubernetes query using LangGraph workflow.
         
         Args:
-            query: Natural language query about K8s resources
+            query: Natural language query about Kubernetes resources
             
         Returns:
             Dict containing parsed intent, raw kubectl output, and enhanced response
         """
         try:
-            # Step 1: Check for banned operations or restricted resources
-            security_check = self._security_check(query)
-            if security_check:
-                return security_check
+            # Initialize state
+            initial_state: K8sState = {
+                "query": query,
+                "parsed_intent": {},
+                "security_check": {},
+                "kubectl_result": "",
+                "enhanced_response": "",
+                "error": "",
+                "messages": [HumanMessage(content=query)]
+            }
             
-            # Step 2: Parse the query intent using LLM
-            intent = await self._parse_intent(query)
-            logger.info(f"Parsed intent: {intent}")
+            # Execute the workflow
+            result = await self.workflow.ainvoke(initial_state)
             
-            # Check if parsing returned a security error
-            if isinstance(intent, dict) and intent.get("error"):
-                return intent
-            
-            # Step 3: Resolve resource names if needed (e.g., "backend pod" -> actual pod name)
-            resolved_intent = await self._resolve_resource_names(intent)
-            logger.info(f"Resolved intent: {resolved_intent}")
-            
-            # Step 4: Execute kubectl command based on intent
-            kubectl_result = self._execute_kubectl(resolved_intent)
-            logger.info(f"Kubectl executed, result length: {len(kubectl_result)}")
-            
-            # Step 5: Enhance the response using LLM
-            enhanced_response = await self._enhance_response(kubectl_result, resolved_intent, query)
-            
+            # Return the final result
             return {
                 "query": query,
-                "parsed_intent": resolved_intent,
-                "raw_response": kubectl_result,
-                "enhanced_response": enhanced_response,
-                "success": True
+                "parsed_intent": result.get("parsed_intent"),
+                "raw_response": result.get("kubectl_result"),
+                "enhanced_response": result.get("enhanced_response"),
+                "error": result.get("error"),
+                "success": not bool(result.get("error"))
+            }
+            
+        except Exception as e:
+            logger.error(f"Workflow execution failed: {e}")
+            return {
+                "query": query,
+                "error": f"An unexpected error occurred: {str(e)}",
+                "success": False
             }
             
         except Exception as e:
@@ -75,52 +137,8 @@ class K8sAssistant:
                 "success": False
             }
 
-    def _security_check(self, query: str) -> Dict[str, Any]:
-        """
-        Check for banned operations and restricted resources.
-        Returns error response if query is not allowed, None if safe.
-        """
-        query_lower = query.lower()
-        
-        # Check for banned actions
-        for banned_action in self.banned_actions:
-            if banned_action in query_lower:
-                return {
-                    "query": query,
-                    "error": f"🚫 Security Warning: '{banned_action}' operations are not allowed for safety reasons.",
-                    "suggestion": "You can only perform read-only operations like 'list', 'get', 'describe', and 'logs'.",
-                    "success": False
-                }
-        
-        # Check for restricted resources (with variations)
-        restricted_patterns = {
-            "secrets": ["secret", "secrets"],
-            "roles": ["role", "roles", "rolebinding", "rolebindings"],
-            "clusterroles": ["clusterrole", "clusterroles", "clusterrolebinding", "clusterrolebindings"]
-        }
-        
-        for resource_type, patterns in restricted_patterns.items():
-            for pattern in patterns:
-                if pattern in query_lower:
-                    return {
-                        "query": query,
-                        "error": f"🔒 Access Denied: '{pattern}' resources are restricted for security reasons.",
-                        "suggestion": "Try querying other resources like pods, services, deployments, configmaps, or ingress instead.",
-                        "success": False
-                    }
-        
-        # Also check the legacy way for backward compatibility
-        for restricted in self.restricted_resources:
-            if restricted in query_lower:
-                return {
-                    "query": query,
-                    "error": f"🔒 Access Denied: '{restricted}' resources are restricted for security reasons.",
-                    "suggestion": "Try querying other resources like pods, services, deployments, configmaps, or ingress instead.",
-                    "success": False
-                }
-        
-        return None
-
+    # Original helper methods (used by LangGraph nodes)
+    
     async def _resolve_resource_names(self, intent: Dict[str, Any]) -> Dict[str, Any]:
         """
         Intelligently resolve partial resource names to actual resource names.
@@ -207,7 +225,7 @@ class K8sAssistant:
         
         return intent
 
-    async def _parse_intent(self, query: str) -> Dict[str, Any]:
+    def _parse_intent(self, query: str) -> Dict[str, Any]:
         """
         Use LLM to parse the natural language query into structured intent.
         """
@@ -244,11 +262,13 @@ Examples:
 - "list all pods" -> {{"resource_type": "pods", "action": "list", "resource_name": null, "namespace": null, "additional_flags": []}}
 - "show logs for backend pod" -> {{"resource_type": "pods", "action": "logs", "resource_name": "backend", "namespace": null, "additional_flags": []}}
 - "describe coredns pod in kube-system" -> {{"resource_type": "pods", "action": "describe", "resource_name": "coredns", "namespace": "kube-system", "additional_flags": []}}
+- "list pv" -> {{"resource_type": "persistentvolumes", "action": "list", "resource_name": null, "namespace": null, "additional_flags": []}}
+- "show pvc" -> {{"resource_type": "persistentvolumeclaims", "action": "list", "resource_name": null, "namespace": null, "additional_flags": []}}
 - "show the logs for this pod - backend-deployment-f8dbcddb8-knvlc" -> {{"resource_type": "pods", "action": "logs", "resource_name": "backend-deployment-f8dbcddb8-knvlc", "namespace": null, "additional_flags": []}}
 """
         
         try:
-            parsed_response = await get_text_completion(prompt)
+            parsed_response = get_text_completion(prompt)
             # Extract JSON from response
             json_match = re.search(r'\{.*\}', parsed_response, re.DOTALL)
             if json_match:
@@ -303,7 +323,10 @@ Examples:
                 "deploy": "deployments",
                 "deployment": "deployments",
                 "cm": "configmaps",
-                "pv": "persistentvolumes"
+                "pv": "persistentvolumes",
+                "persistentvolume": "persistentvolumes",
+                "pvc": "persistentvolumeclaims",
+                "persistentvolumeclaim": "persistentvolumeclaims"
             }
             intent["resource_type"] = resource_map.get(intent["resource_type"], "pods")
         
@@ -339,7 +362,9 @@ Examples:
             "configmaps": ["configmap", "configmaps", "cm"],
             "ingress": ["ingress", "ing"],
             "nodes": ["node", "nodes"],
-            "namespaces": ["namespace", "namespaces", "ns"]
+            "namespaces": ["namespace", "namespaces", "ns"],
+            "persistentvolumes": ["persistentvolume", "persistentvolumes", "pv"],
+            "persistentvolumeclaims": ["persistentvolumeclaim", "persistentvolumeclaims", "pvc"]
         }
         
         for resource, patterns in resource_patterns.items():
@@ -496,7 +521,7 @@ Examples:
         except Exception as e:
             return f"Error executing kubectl: {str(e)}"
 
-    async def _enhance_response(self, kubectl_output: str, intent: Dict[str, Any], original_query: str) -> str:
+    def _enhance_response(self, kubectl_output: str, intent: Dict[str, Any], original_query: str) -> str:
         """
         Use LLM to provide a human-friendly explanation of the kubectl output.
         """
@@ -523,8 +548,122 @@ Keep the response concise but informative. Use emojis sparingly for readability.
 """
         
         try:
-            enhanced = await get_text_completion(prompt)
+            enhanced = get_text_completion(prompt)
             return enhanced.strip()
         except Exception as e:
             logger.error(f"Failed to enhance response: {e}")
             return f"Here's the kubectl output for your query:\n\n{kubectl_output}"
+    
+    # LangGraph Node Methods
+    
+    def _security_check_node(self, state: K8sState) -> K8sState:
+        """Security check node - validates query for banned operations and restricted resources"""
+        query_lower = state["query"].lower()
+        
+        # Check for banned actions
+        for banned_action in self.banned_actions:
+            if banned_action in query_lower:
+                state["error"] = f"🚫 Security Warning: '{banned_action}' operations are not allowed for safety reasons."
+                state["security_check"] = {"blocked": True, "reason": f"banned_action: {banned_action}"}
+                return state
+        
+        # Check for restricted resources (with variations)
+        restricted_patterns = {
+            "secrets": ["secret", "secrets"],
+            "roles": ["role", "roles", "rolebinding", "rolebindings"],
+            "clusterroles": ["clusterrole", "clusterroles", "clusterrolebinding", "clusterrolebindings"]
+        }
+        
+        for resource_type, patterns in restricted_patterns.items():
+            for pattern in patterns:
+                if pattern in query_lower:
+                    state["error"] = f"🔒 Access Denied: '{pattern}' resources are restricted for security reasons."
+                    state["security_check"] = {"blocked": True, "reason": f"restricted_resource: {pattern}"}
+                    return state
+        
+        state["security_check"] = {"blocked": False}
+        logger.info("Security check passed")
+        return state
+    
+    def _parse_intent_node(self, state: K8sState) -> K8sState:
+        """Parse intent node - converts natural language to structured intent"""
+        try:
+            intent = self._parse_intent(state["query"])
+            
+            # Check if parsing returned an error
+            if isinstance(intent, dict) and intent.get("error"):
+                state["error"] = intent["error"]
+                return state
+            
+            state["parsed_intent"] = intent
+            logger.info(f"Intent parsed: {intent}")
+            return state
+            
+        except Exception as e:
+            logger.error(f"Intent parsing failed: {e}")
+            state["error"] = f"Failed to parse query: {str(e)}"
+            return state
+    
+    async def _resolve_resources_node(self, state: K8sState) -> K8sState:
+        """Resolve resources node - resolves partial resource names to actual names"""
+        try:
+            resolved_intent = await self._resolve_resource_names(state["parsed_intent"])
+            state["parsed_intent"] = resolved_intent
+            logger.info(f"Resources resolved: {resolved_intent}")
+            return state
+            
+        except Exception as e:
+            logger.error(f"Resource resolution failed: {e}")
+            state["error"] = f"Failed to resolve resources: {str(e)}"
+            return state
+    
+    def _execute_kubectl_node(self, state: K8sState) -> K8sState:
+        """Execute kubectl node - runs the kubectl command"""
+        try:
+            kubectl_result = self._execute_kubectl(state["parsed_intent"])
+            state["kubectl_result"] = kubectl_result
+            logger.info(f"Kubectl executed, result length: {len(kubectl_result)}")
+            return state
+            
+        except Exception as e:
+            logger.error(f"Kubectl execution failed: {e}")
+            state["error"] = f"Failed to execute kubectl: {str(e)}"
+            return state
+    
+    def _enhance_response_node(self, state: K8sState) -> K8sState:
+        """Enhance response node - uses LLM to enhance the kubectl output"""
+        try:
+            enhanced_response = self._enhance_response(
+                state["kubectl_result"], 
+                state["parsed_intent"], 
+                state["query"]
+            )
+            state["enhanced_response"] = enhanced_response
+            logger.info("Response enhanced by LLM")
+            return state
+            
+        except Exception as e:
+            logger.error(f"Response enhancement failed: {e}")
+            # Don't fail the workflow if enhancement fails
+            state["enhanced_response"] = "Enhancement unavailable"
+            return state
+    
+    def _format_output_node(self, state: K8sState) -> K8sState:
+        """Format output node - final formatting of the response"""
+        # This node just passes through the state for final processing
+        logger.info("Output formatted and ready")
+        return state
+    
+    # Routing Functions
+    
+    def _route_after_security(self, state: K8sState) -> str:
+        """Route after security check"""
+        if state["security_check"].get("blocked", False):
+            return "error"
+        return "continue"
+    
+    def _route_after_parsing(self, state: K8sState) -> str:
+        """Route after intent parsing"""
+        if state.get("error"):
+            return "error"
+        return "continue"
