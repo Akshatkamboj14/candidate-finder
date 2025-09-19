@@ -1,8 +1,9 @@
 from typing import Dict, Any, TypedDict, Annotated
-import subprocess
 import json
 import re
 import logging
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import HumanMessage, AIMessage
@@ -37,6 +38,22 @@ class K8sAssistant:
         ]
         self.banned_actions = ["delete", "edit", "patch", "apply", "create"]
         self.restricted_resources = ["secrets"]
+        
+        # Initialize Kubernetes client
+        try:
+            # Try to load in-cluster config first (when running in a pod)
+            config.load_incluster_config()
+        except config.ConfigException:
+            try:
+                # Fall back to kubeconfig file
+                config.load_kube_config()
+            except config.ConfigException:
+                logger.warning("Could not load Kubernetes config. Some features may not work.")
+        
+        # Initialize API clients
+        self.v1 = client.CoreV1Api()
+        self.apps_v1 = client.AppsV1Api()
+        self.networking_v1 = client.NetworkingV1Api()
         
         # Build LangGraph workflow
         self.workflow = self._build_workflow()
@@ -156,17 +173,32 @@ class K8sAssistant:
             return intent
         
         try:
-            # Get list of resources
-            cmd = ["kubectl", "get", resource_type]
-            if namespace and namespace != "default":
-                cmd.extend(["-n", namespace])
-            cmd.extend(["--no-headers", "-o", "custom-columns=NAME:.metadata.name"])
+            # Get list of resources using Kubernetes client
+            resource_names = []
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if resource_type == "pods":
+                pods = self.v1.list_namespaced_pod(namespace=namespace)
+                resource_names = [pod.metadata.name for pod in pods.items]
+            elif resource_type == "services":
+                services = self.v1.list_namespaced_service(namespace=namespace)
+                resource_names = [svc.metadata.name for svc in services.items]
+            elif resource_type == "deployments":
+                deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
+                resource_names = [dep.metadata.name for dep in deployments.items]
+            elif resource_type == "configmaps":
+                configmaps = self.v1.list_namespaced_config_map(namespace=namespace)
+                resource_names = [cm.metadata.name for cm in configmaps.items]
+            elif resource_type == "persistentvolumeclaims":
+                pvcs = self.v1.list_namespaced_persistent_volume_claim(namespace=namespace)
+                resource_names = [pvc.metadata.name for pvc in pvcs.items]
+            elif resource_type == "nodes":
+                nodes = self.v1.list_node()
+                resource_names = [node.metadata.name for node in nodes.items]
+            elif resource_type == "namespaces":
+                namespaces = self.v1.list_namespace()
+                resource_names = [ns.metadata.name for ns in namespaces.items]
             
-            if result.returncode == 0 and result.stdout.strip():
-                resource_names = [name.strip() for name in result.stdout.strip().split('\n') if name.strip()]
-                
+            if resource_names:
                 # Try different matching strategies
                 matches = []
                 
@@ -218,8 +250,8 @@ class K8sAssistant:
                 # If no good match found, return as is with a note
                 intent["_resolution_note"] = f"No match found for '{partial_name}'. Available: {', '.join(resource_names[:5])}"
                 
-        except subprocess.TimeoutExpired:
-            intent["_resolution_note"] = "Timeout while resolving resource names"
+        except ApiException as e:
+            intent["_resolution_note"] = f"API error while resolving resource names: {e.reason}"
         except Exception as e:
             intent["_resolution_note"] = f"Error resolving resource names: {str(e)}"
         
@@ -462,64 +494,132 @@ Examples:
 
     def _execute_kubectl(self, intent: Dict[str, Any]) -> str:
         """
-        Execute the appropriate kubectl command based on parsed intent.
+        Execute the appropriate Kubernetes API call based on parsed intent.
         """
         try:
-            cmd = ["kubectl"]
+            action = intent["action"]
+            resource_type = intent["resource_type"]
+            resource_name = intent.get("resource_name")
+            namespace = intent.get("namespace", "default")
             
-            # Build the command based on action
-            if intent["action"] == "logs":
-                cmd.extend(["logs"])
-                if intent["resource_name"]:
-                    cmd.append(intent["resource_name"])
-                else:
+            if action == "logs":
+                if not resource_name:
                     return "Error: Resource name required for logs command"
-            
-            elif intent["action"] in ["list", "get"]:
-                cmd.extend(["get", intent["resource_type"]])
-                if intent["resource_name"]:
-                    cmd.append(intent["resource_name"])
-            
-            elif intent["action"] == "describe":
-                cmd.extend(["describe", intent["resource_type"]])
-                if intent["resource_name"]:
-                    cmd.append(intent["resource_name"])
-            
-            else:
-                cmd.extend([intent["action"], intent["resource_type"]])
-                if intent["resource_name"]:
-                    cmd.append(intent["resource_name"])
-            
-            # Add namespace if specified
-            if intent["namespace"]:
-                cmd.extend(["-n", intent["namespace"]])
-            
-            # Add additional flags
-            if intent["additional_flags"]:
-                cmd.extend(intent["additional_flags"])
-            
-            # Execute the command
-            logger.info(f"Executing command: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=30,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                return result.stdout.strip()
-            else:
-                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                return f"kubectl command failed: {error_msg}"
+                if resource_type != "pods":
+                    return "Error: Logs can only be retrieved for pods"
                 
-        except subprocess.TimeoutExpired:
-            return "Error: kubectl command timed out after 30 seconds"
-        except FileNotFoundError:
-            return "Error: kubectl command not found. Please ensure kubectl is installed and in PATH"
+                try:
+                    logs = self.v1.read_namespaced_pod_log(
+                        name=resource_name, 
+                        namespace=namespace,
+                        tail_lines=100  # Limit to last 100 lines
+                    )
+                    return logs
+                except ApiException as e:
+                    return f"Error retrieving logs: {e.reason}"
+            
+            elif action in ["list", "get"]:
+                if resource_type == "pods":
+                    if resource_name:
+                        try:
+                            pod = self.v1.read_namespaced_pod(name=resource_name, namespace=namespace)
+                            return self._format_pod_details(pod)
+                        except ApiException as e:
+                            return f"Error getting pod: {e.reason}"
+                    else:
+                        try:
+                            pods = self.v1.list_namespaced_pod(namespace=namespace)
+                            return self._format_pods_list(pods.items)
+                        except ApiException as e:
+                            return f"Error listing pods: {e.reason}"
+                
+                elif resource_type == "services":
+                    if resource_name:
+                        try:
+                            service = self.v1.read_namespaced_service(name=resource_name, namespace=namespace)
+                            return self._format_service_details(service)
+                        except ApiException as e:
+                            return f"Error getting service: {e.reason}"
+                    else:
+                        try:
+                            services = self.v1.list_namespaced_service(namespace=namespace)
+                            return self._format_services_list(services.items)
+                        except ApiException as e:
+                            return f"Error listing services: {e.reason}"
+                
+                elif resource_type == "deployments":
+                    if resource_name:
+                        try:
+                            deployment = self.apps_v1.read_namespaced_deployment(name=resource_name, namespace=namespace)
+                            return self._format_deployment_details(deployment)
+                        except ApiException as e:
+                            return f"Error getting deployment: {e.reason}"
+                    else:
+                        try:
+                            deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
+                            return self._format_deployments_list(deployments.items)
+                        except ApiException as e:
+                            return f"Error listing deployments: {e.reason}"
+                
+                elif resource_type == "nodes":
+                    if resource_name:
+                        try:
+                            node = self.v1.read_node(name=resource_name)
+                            return self._format_node_details(node)
+                        except ApiException as e:
+                            return f"Error getting node: {e.reason}"
+                    else:
+                        try:
+                            nodes = self.v1.list_node()
+                            return self._format_nodes_list(nodes.items)
+                        except ApiException as e:
+                            return f"Error listing nodes: {e.reason}"
+                
+                elif resource_type == "namespaces":
+                    if resource_name:
+                        try:
+                            namespace_obj = self.v1.read_namespace(name=resource_name)
+                            return self._format_namespace_details(namespace_obj)
+                        except ApiException as e:
+                            return f"Error getting namespace: {e.reason}"
+                    else:
+                        try:
+                            namespaces = self.v1.list_namespace()
+                            return self._format_namespaces_list(namespaces.items)
+                        except ApiException as e:
+                            return f"Error listing namespaces: {e.reason}"
+                
+                else:
+                    return f"Error: Resource type '{resource_type}' not yet supported"
+            
+            elif action == "describe":
+                # For describe, we'll provide detailed information
+                if resource_type == "pods" and resource_name:
+                    try:
+                        pod = self.v1.read_namespaced_pod(name=resource_name, namespace=namespace)
+                        return self._format_pod_describe(pod)
+                    except ApiException as e:
+                        return f"Error describing pod: {e.reason}"
+                elif resource_type == "services" and resource_name:
+                    try:
+                        service = self.v1.read_namespaced_service(name=resource_name, namespace=namespace)
+                        return self._format_service_describe(service)
+                    except ApiException as e:
+                        return f"Error describing service: {e.reason}"
+                elif resource_type == "deployments" and resource_name:
+                    try:
+                        deployment = self.apps_v1.read_namespaced_deployment(name=resource_name, namespace=namespace)
+                        return self._format_deployment_describe(deployment)
+                    except ApiException as e:
+                        return f"Error describing deployment: {e.reason}"
+                else:
+                    return f"Error: Describe requires a specific resource name"
+            
+            else:
+                return f"Error: Action '{action}' not supported"
+                
         except Exception as e:
-            return f"Error executing kubectl: {str(e)}"
+            return f"Error executing Kubernetes operation: {str(e)}"
 
     def _enhance_response(self, kubectl_output: str, intent: Dict[str, Any], original_query: str) -> str:
         """
@@ -654,16 +754,251 @@ Keep the response concise but informative. Use emojis sparingly for readability.
         logger.info("Output formatted and ready")
         return state
     
-    # Routing Functions
+    # Formatting helper methods for Kubernetes resources
     
-    def _route_after_security(self, state: K8sState) -> str:
-        """Route after security check"""
-        if state["security_check"].get("blocked", False):
-            return "error"
-        return "continue"
+    def _format_pods_list(self, pods):
+        """Format a list of pods for display"""
+        if not pods:
+            return "No pods found"
+        
+        result = "NAME\t\tREADY\tSTATUS\t\tRESTARTS\tAGE\n"
+        for pod in pods:
+            ready_containers = sum(1 for condition in pod.status.conditions or [] 
+                                 if condition.type == "Ready" and condition.status == "True")
+            total_containers = len(pod.spec.containers)
+            ready_status = f"{ready_containers}/{total_containers}"
+            
+            status = pod.status.phase
+            restarts = sum(container_status.restart_count for container_status in pod.status.container_statuses or [])
+            
+            # Calculate age
+            created = pod.metadata.creation_timestamp
+            age = self._calculate_age(created)
+            
+            result += f"{pod.metadata.name}\t{ready_status}\t{status}\t\t{restarts}\t\t{age}\n"
+        
+        return result
     
-    def _route_after_parsing(self, state: K8sState) -> str:
-        """Route after intent parsing"""
-        if state.get("error"):
-            return "error"
-        return "continue"
+    def _format_pod_details(self, pod):
+        """Format detailed pod information"""
+        result = f"Name: {pod.metadata.name}\n"
+        result += f"Namespace: {pod.metadata.namespace}\n"
+        result += f"Status: {pod.status.phase}\n"
+        result += f"IP: {pod.status.pod_ip or 'N/A'}\n"
+        result += f"Node: {pod.spec.node_name or 'N/A'}\n"
+        result += f"Created: {pod.metadata.creation_timestamp}\n"
+        
+        if pod.spec.containers:
+            result += "Containers:\n"
+            for container in pod.spec.containers:
+                result += f"  - {container.name}: {container.image}\n"
+        
+        return result
+    
+    def _format_pod_describe(self, pod):
+        """Format detailed pod description similar to kubectl describe"""
+        result = f"Name:         {pod.metadata.name}\n"
+        result += f"Namespace:    {pod.metadata.namespace}\n"
+        result += f"Priority:     {pod.spec.priority or 0}\n"
+        result += f"Node:         {pod.spec.node_name or 'N/A'}\n"
+        result += f"Start Time:   {pod.metadata.creation_timestamp}\n"
+        
+        if pod.metadata.labels:
+            result += "Labels:       "
+            result += "\n              ".join([f"{k}={v}" for k, v in pod.metadata.labels.items()])
+            result += "\n"
+        
+        result += f"Status:       {pod.status.phase}\n"
+        result += f"IP:           {pod.status.pod_ip or 'N/A'}\n"
+        
+        if pod.spec.containers:
+            result += "Containers:\n"
+            for container in pod.spec.containers:
+                result += f"  {container.name}:\n"
+                result += f"    Image:      {container.image}\n"
+                result += f"    Port:       {container.ports[0].container_port if container.ports else 'N/A'}\n"
+        
+        return result
+    
+    def _format_services_list(self, services):
+        """Format a list of services for display"""
+        if not services:
+            return "No services found"
+        
+        result = "NAME\t\tTYPE\t\tCLUSTER-IP\tEXTERNAL-IP\tPORT(S)\t\tAGE\n"
+        for service in services:
+            external_ip = service.status.load_balancer.ingress[0].ip if (
+                service.status.load_balancer and 
+                service.status.load_balancer.ingress
+            ) else "<none>"
+            
+            ports = ",".join([f"{port.port}:{port.target_port}/{port.protocol}" 
+                            for port in service.spec.ports or []])
+            
+            age = self._calculate_age(service.metadata.creation_timestamp)
+            
+            result += f"{service.metadata.name}\t{service.spec.type}\t{service.spec.cluster_ip}\t{external_ip}\t{ports}\t{age}\n"
+        
+        return result
+    
+    def _format_service_details(self, service):
+        """Format detailed service information"""
+        result = f"Name: {service.metadata.name}\n"
+        result += f"Namespace: {service.metadata.namespace}\n"
+        result += f"Type: {service.spec.type}\n"
+        result += f"Cluster IP: {service.spec.cluster_ip}\n"
+        
+        if service.spec.ports:
+            result += "Ports:\n"
+            for port in service.spec.ports:
+                result += f"  - {port.port}:{port.target_port}/{port.protocol}\n"
+        
+        return result
+    
+    def _format_service_describe(self, service):
+        """Format detailed service description"""
+        result = f"Name:              {service.metadata.name}\n"
+        result += f"Namespace:         {service.metadata.namespace}\n"
+        
+        if service.metadata.labels:
+            result += "Labels:            "
+            result += "\n                   ".join([f"{k}={v}" for k, v in service.metadata.labels.items()])
+            result += "\n"
+        
+        result += f"Type:              {service.spec.type}\n"
+        result += f"IP Family Policy:  {service.spec.ip_family_policy or 'SingleStack'}\n"
+        result += f"IP Families:       {','.join(service.spec.ip_families or ['IPv4'])}\n"
+        result += f"IP:                {service.spec.cluster_ip}\n"
+        
+        if service.spec.ports:
+            result += "Port:              "
+            for i, port in enumerate(service.spec.ports):
+                if i > 0:
+                    result += "                   "
+                result += f"{port.port}/{port.protocol} TargetPort: {port.target_port}\n"
+        
+        return result
+    
+    def _format_deployments_list(self, deployments):
+        """Format a list of deployments for display"""
+        if not deployments:
+            return "No deployments found"
+        
+        result = "NAME\t\tREADY\tUP-TO-DATE\tAVAILABLE\tAGE\n"
+        for deployment in deployments:
+            ready = f"{deployment.status.ready_replicas or 0}/{deployment.spec.replicas or 0}"
+            up_to_date = deployment.status.updated_replicas or 0
+            available = deployment.status.available_replicas or 0
+            age = self._calculate_age(deployment.metadata.creation_timestamp)
+            
+            result += f"{deployment.metadata.name}\t{ready}\t{up_to_date}\t\t{available}\t\t{age}\n"
+        
+        return result
+    
+    def _format_deployment_details(self, deployment):
+        """Format detailed deployment information"""
+        result = f"Name: {deployment.metadata.name}\n"
+        result += f"Namespace: {deployment.metadata.namespace}\n"
+        result += f"Replicas: {deployment.status.ready_replicas or 0}/{deployment.spec.replicas or 0}\n"
+        result += f"Strategy: {deployment.spec.strategy.type}\n"
+        result += f"Created: {deployment.metadata.creation_timestamp}\n"
+        
+        return result
+    
+    def _format_deployment_describe(self, deployment):
+        """Format detailed deployment description"""
+        result = f"Name:                   {deployment.metadata.name}\n"
+        result += f"Namespace:              {deployment.metadata.namespace}\n"
+        result += f"CreationTimestamp:      {deployment.metadata.creation_timestamp}\n"
+        
+        if deployment.metadata.labels:
+            result += "Labels:                 "
+            result += "\n                        ".join([f"{k}={v}" for k, v in deployment.metadata.labels.items()])
+            result += "\n"
+        
+        result += f"Replicas:               {deployment.spec.replicas} desired | {deployment.status.updated_replicas or 0} updated | {deployment.status.replicas or 0} total | {deployment.status.available_replicas or 0} available | {deployment.status.unavailable_replicas or 0} unavailable\n"
+        result += f"StrategyType:           {deployment.spec.strategy.type}\n"
+        
+        return result
+    
+    def _format_nodes_list(self, nodes):
+        """Format a list of nodes for display"""
+        if not nodes:
+            return "No nodes found"
+        
+        result = "NAME\t\tSTATUS\tROLES\t\tAGE\tVERSION\n"
+        for node in nodes:
+            status = "Ready" if any(condition.type == "Ready" and condition.status == "True" 
+                                  for condition in node.status.conditions or []) else "NotReady"
+            
+            roles = []
+            if node.metadata.labels:
+                for key in node.metadata.labels:
+                    if key.startswith("node-role.kubernetes.io/"):
+                        roles.append(key.split("/")[1])
+            roles_str = ",".join(roles) if roles else "<none>"
+            
+            age = self._calculate_age(node.metadata.creation_timestamp)
+            version = node.status.node_info.kubelet_version
+            
+            result += f"{node.metadata.name}\t{status}\t{roles_str}\t\t{age}\t{version}\n"
+        
+        return result
+    
+    def _format_node_details(self, node):
+        """Format detailed node information"""
+        result = f"Name: {node.metadata.name}\n"
+        result += f"Roles: {','.join([key.split('/')[1] for key in node.metadata.labels.keys() if key.startswith('node-role.kubernetes.io/')])}\n"
+        result += f"Labels: {len(node.metadata.labels or {})} labels\n"
+        result += f"Kernel Version: {node.status.node_info.kernel_version}\n"
+        result += f"OS Image: {node.status.node_info.os_image}\n"
+        result += f"Container Runtime: {node.status.node_info.container_runtime_version}\n"
+        result += f"Kubelet Version: {node.status.node_info.kubelet_version}\n"
+        
+        return result
+    
+    def _format_namespaces_list(self, namespaces):
+        """Format a list of namespaces for display"""
+        if not namespaces:
+            return "No namespaces found"
+        
+        result = "NAME\t\t\tSTATUS\tAGE\n"
+        for namespace in namespaces:
+            status = namespace.status.phase
+            age = self._calculate_age(namespace.metadata.creation_timestamp)
+            
+            result += f"{namespace.metadata.name}\t\t{status}\t{age}\n"
+        
+        return result
+    
+    def _format_namespace_details(self, namespace):
+        """Format detailed namespace information"""
+        result = f"Name: {namespace.metadata.name}\n"
+        result += f"Status: {namespace.status.phase}\n"
+        result += f"Created: {namespace.metadata.creation_timestamp}\n"
+        
+        if namespace.metadata.labels:
+            result += f"Labels: {len(namespace.metadata.labels)} labels\n"
+        
+        return result
+    
+    def _calculate_age(self, creation_timestamp):
+        """Calculate age from creation timestamp"""
+        import datetime
+        if not creation_timestamp:
+            return "Unknown"
+        
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if creation_timestamp.tzinfo is None:
+            creation_timestamp = creation_timestamp.replace(tzinfo=datetime.timezone.utc)
+        
+        age = now - creation_timestamp
+        
+        if age.days > 0:
+            return f"{age.days}d"
+        elif age.seconds > 3600:
+            return f"{age.seconds // 3600}h"
+        elif age.seconds > 60:
+            return f"{age.seconds // 60}m"
+        else:
+            return f"{age.seconds}s"

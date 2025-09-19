@@ -12,5 +12,6 @@ langchain-community
 langchain
 langchain_core
 langgraph
+kubernetes
 
 # Reading file content

@@ -14,9 +14,10 @@ spec:
       labels:
         app: backend
     spec:
+      serviceAccountName: k8s-assistant-sa
       containers:
       - name: backend
-        image: akshat1414/candidate-finder-backend:v2
+        image: akshat1414/candidate-finder-backend:v3
         imagePullPolicy: Always  # Pull from Docker Hub
         ports:
         - containerPort: 8000
