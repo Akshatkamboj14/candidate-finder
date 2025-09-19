@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: akshat1414/candidate-finder-frontend:latest
+        image: akshat1414/candidate-finder-frontend:v1
         imagePullPolicy: Always  # Pull from Docker Hub
         ports:
         - containerPort: 80
